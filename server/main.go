@@ -44,8 +44,6 @@ func (s *server) auth(next http.Handler) http.Handler {
 	})
 }
 
-// Then in main, it looks even cleaner:
-
 func health(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
