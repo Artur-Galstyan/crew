@@ -1,45 +1,78 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/glebarez/sqlite" // Pure Go SQLite driver for GORM
 	"github.com/joho/godotenv"
+	"gorm.io/gorm"
 )
 
 type config struct {
 	apiKey string
 }
 
-func authMiddleware(apiKey string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authHeader := r.Header.Get("Authorization")
-			clientApiKey := strings.TrimPrefix(authHeader, "Bearer ")
-			if clientApiKey == "" || clientApiKey != apiKey {
-				slog.Warn("Unauthorized access attempt",
-					"remote_addr", r.RemoteAddr,
-					"path", r.URL.Path,
-				)
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
+type server struct {
+	db  *gorm.DB
+	cfg config
 }
+
+type User struct {
+	ID   uint   `gorm:"primaryKey;autoIncrement"`
+	Name string `gorm:"size:255;not null"`
+}
+
+type RegisterRequest struct {
+	Name string `json:"name"`
+}
+
+// Inside server struct
+func (s *server) auth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if strings.TrimPrefix(authHeader, "Bearer ") != s.cfg.apiKey {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Then in main, it looks even cleaner:
 
 func health(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
 
-func register(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("Successfully accessed protected register route"))
+func (s *server) register(w http.ResponseWriter, r *http.Request) {
+	var req RegisterRequest
+
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		slog.Error("Failed to decode JSON", "error", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	newUser := User{
+		Name: req.Name,
+	}
+
+	result := s.db.Create(&newUser)
+	if result.Error != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte("User created: " + req.Name))
 }
 
 func main() {
@@ -53,11 +86,33 @@ func main() {
 		apiKey: crewApiKey,
 	}
 
-	slog.Info("config is", "config", cfg)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		slog.Error("Could not find home directory:", "err", err)
+	}
+	crewPath := filepath.Join(home, ".crew")
+	err = os.MkdirAll(crewPath, 0755)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	sqliteDbPath := filepath.Join(crewPath, "crew.db")
+	db, err := gorm.Open(sqlite.Open(sqliteDbPath), &gorm.Config{})
+
+	err = db.AutoMigrate(&User{})
+	if err != nil {
+		slog.Error("Auto-migration failed!", "error", err)
+		os.Exit(1)
+	}
+
+	srv := server{
+		db:  db,
+		cfg: cfg,
+	}
 
 	router := http.NewServeMux()
 	router.HandleFunc("/health", health)
-	router.Handle("POST /register", authMiddleware(cfg.apiKey)(http.HandlerFunc(register)))
+	router.Handle("POST /register", srv.auth(http.HandlerFunc(srv.register)))
 
 	server := http.Server{
 		Addr:    ":8080",
