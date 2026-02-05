@@ -48,13 +48,9 @@ func initialModel() model {
 		slog.Error("Could not create crew directory:", "err", err)
 	}
 
+	var cfg crewConfig
 	crewDir := getCrewDir()
 	crewCfgJson := filepath.Join(crewDir, "config.json")
-
-	var cfg crewConfig
-
-	state := ConfiguringCrewUrl
-
 	file, err := os.Open(crewCfgJson)
 	if err != nil {
 		slog.Debug("No existing config found. ", "err", err)
@@ -62,6 +58,11 @@ func initialModel() model {
 	} else {
 		defer file.Close()
 		json.NewDecoder(file).Decode(&cfg)
+	}
+
+	state := ConfiguringCrewUrl
+	if cfg.ServerUrl != "" && cfg.ServerApiKey != "" {
+		state = Lobby
 	}
 
 	return model{
@@ -121,6 +122,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// try to register
 				m.serverApiKey = m.textInput.Value()
 				m.completedLines = append(m.completedLines, m.serverApiKey)
+
+				serverCfg := crewConfig{
+					ServerApiKey: m.serverApiKey,
+					ServerUrl:    m.serverUrl,
+				}
+
+				data, err := json.Marshal(serverCfg)
+				if err != nil {
+					slog.Error("Failed to write Crew Config. ", "err", err)
+				} else {
+					err = os.WriteFile(filepath.Join(getCrewDir(), "config.json"), data, 0644)
+					if err != nil {
+						slog.Error("Failed to write Crew Config. ", "err", err)
+					}
+				}
+
 				m.state = Lobby
 				return m, nil
 			case "ctrl+c":
