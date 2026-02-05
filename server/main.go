@@ -25,14 +25,17 @@ type server struct {
 
 type User struct {
 	ID   uint   `gorm:"primaryKey;autoIncrement"`
-	Name string `gorm:"size:255;not null"`
+	Name string `gorm:"size:255;not null;unique" json:"name"`
 }
 
 type RegisterRequest struct {
 	Name string `json:"name"`
 }
 
-// Inside server struct
+type LoginRequest struct {
+	Name string `json:"name"`
+}
+
 func (s *server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
@@ -48,6 +51,8 @@ func health(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
+
+func (s *server) login(w http.ResponseWriter, r *http.Request) {}
 
 func (s *server) register(w http.ResponseWriter, r *http.Request) {
 	var req RegisterRequest
@@ -65,7 +70,7 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 
 	result := s.db.Create(&newUser)
 	if result.Error != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		http.Error(w, result.Error.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -111,6 +116,7 @@ func main() {
 	router := http.NewServeMux()
 	router.HandleFunc("/health", health)
 	router.Handle("POST /register", srv.auth(http.HandlerFunc(srv.register)))
+	router.Handle("POST /login", srv.auth(http.HandlerFunc(srv.login)))
 
 	server := http.Server{
 		Addr:    ":8080",
